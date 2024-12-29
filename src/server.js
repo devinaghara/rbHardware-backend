@@ -27,42 +27,71 @@ app.use(cookieParser());
 app.use(bodyparser.json());
 
 connectDB()
-    .then(() => {
-        app.listen(process.env.PORT || 8000, () => {
-            console.log(`server is litsening on port number ${process.env.PORT}`);
-        });
-    })
-    .catch((err) => {
-        console.log("MongoDB connection failed.", err);
+  .then(() => {
+    app.listen(process.env.PORT || 8000, () => {
+      console.log(`server is litsening on port number ${process.env.PORT}`);
     });
+  })
+  .catch((err) => {
+    console.log("MongoDB connection failed.", err);
+  });
 
-    //session Configuration
+// session Configuration
+// app.use(
+//     session({
+//       secret: "secret",
+//       resave: false,
+//       saveUninitialized: false,
+//       cookie: {
+//         maxAge: 24 * 60 * 60 * 1000,
+//         secure: false,
+//         httpOnly: true,
+//         sameSite: "lax",
+//       },
+//       name: "user",
+//       store: MongoStore.create({
+//         client: mongoose.connection.getClient(),
+//         dbName: process.env.DB_NAME,
+//         collectionName: "sessions",
+//         stringify: false,
+//         autoRemove: "interval",
+//         autoRemoveInterval: 1,
+//       }),
+//     }),
+//   );
+
 app.use(
-    session({
-      secret: "secret",
-      resave: false,
-      saveUninitialized: false,
-      cookie: {
-        maxAge: 24 * 60 * 60 * 1000,
-        secure: false,
-        httpOnly: true,
-        sameSite: "lax",
-      },
-      name: "user",
-      store: MongoStore.create({
-        client: mongoose.connection.getClient(),
-        dbName: process.env.DB_NAME,
-        collectionName: "sessions",
-        stringify: false,
-        autoRemove: "interval",
-        autoRemoveInterval: 1,
-      }),
+  session({
+    secret: process.env.Session_Secret || "secret",
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+      maxAge: 24 * 60 * 60 * 1000,
+      secure: false,
+      httpOnly: true,
+      sameSite: "lax",
+    },
+    name: "user",
+    store: MongoStore.create({
+      client: mongoose.connection.getClient(),
+      // dbName: process.env.DB_NAME,
+      collectionName: "sessions",
+      stringify: false,
+      autoRemove: "interval",
+      autoRemoveInterval: 1,
     }),
-  );
+  }),
+);
 
 import AuthRoutes from "./Routes/Auth.routes.js";
-import ProductRoutes from "./Routes/Product.routes.js"
+import ProductRoutes from "./Routes/Product.routes.js";
+import ColorRoutes from "./Routes/Color.routes.js";
+import MaterialRoutes from "./Routes/Material.routes.js";
+import CategoryRoutes from "./Routes/Category.routes.js";
 
 app.use("/auth", AuthRoutes);
 app.use("/plist", ProductRoutes);
+app.use("/colorfilter", ColorRoutes);
+app.use("/materialfilter", MaterialRoutes);
+app.use("/categoryfilter", CategoryRoutes);
 

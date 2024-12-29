@@ -17,20 +17,16 @@ const productSchema = new mongoose.Schema({
         type: [String],  // Array of image URLs
         required: true
     },
-    availableColors: [{
-        name: {
-            type: String,
-            required: true
-        },
-        colorCode: {
-            type: String,
-            required: true
-        }
+    linkedProducts:[{   
+        type: mongoose.Schema.Types.ObjectId,
     }],
     color: {
         type: String,
         required: true,
-        default: "Matt"
+    },
+    colorCode: {
+        type: String,
+        required: true,
     },
     category: {
         type: String,
