@@ -19,6 +19,24 @@ const userSchema = new mongoose.Schema({
     phone: {
         type: String,
         default: null
+    },
+    isVerified: {
+        type: Boolean,
+        default: false
+    },
+    passwordResetToken: {
+        type: String,
+        default: null
+    },
+    passwordResetExpires: {
+        type: Date,
+        default: null
+    },
+    role: {
+        type: String,
+        enum: ['admin', 'user'],
+        require: true,
+        default: 'user'
     }
 }, {
     timestamps: true

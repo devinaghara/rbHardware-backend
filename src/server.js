@@ -14,6 +14,7 @@ app.use(cors({
   origin: 'http://localhost:5173', // Replace with your frontend URL
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
   credentials: true, // Allow cookies to be sent with requests
+  allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
 dotenv.config();
