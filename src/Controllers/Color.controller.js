@@ -1,5 +1,7 @@
 // controllers/colorController.js
 import Color from "../Models/Color.js";
+//ISSUR HANDLE : COLOR PALATE STYLE IS NOT SHOWN IN PRODUCT CARD IN PRODUCUCT DETAIL PAGE 
+//ALSO HANDLE COLORVARIANT COLLECTION IN DATABASE 
 
 const colorController = {
     // Get all colors
