@@ -1,45 +1,136 @@
+import mongoose from "mongoose";
 import Product from "../Models/Product.js";
+
+// const addProducts = async (req, res) => {
+//     try {
+//         const {
+//             productId,
+//             name,
+//             price,
+//             images,
+//             color,
+//             colorCode,
+//             description,
+//             category,
+//             material
+//         } = req.body;
+
+//         // Validate required fields
+//         if (!productId || !name || !price || !Array.isArray(images) || images.length === 0 || !color || !colorCode || !description || !category || !material) {
+//             return res.status(400).json({
+//                 message: 'All required fields must be provided'
+//             });
+//         }
+
+//         // Check if the product already exists
+//         const existingProduct = await Product.findOne({ productId: productId });
+
+//         if (existingProduct) {
+//             // If the product exists, add the new data to the linkedProducts subarray
+//             existingProduct.linkedProducts.push({
+//                 name,
+//                 price,
+//                 images,
+//                 color,
+//                 colorCode,
+//                 description
+//             });
+
+//             // Save the updated product
+//             const updatedProduct = await existingProduct.save();
+//             return res.status(200).json({
+//                 message: 'Linked product added successfully!',
+//                 product: updatedProduct
+//             });
+//         } else {
+//             // If the product does not exist, create a new product
+//             const newProduct = new Product({
+//                 productId,
+//                 category,
+//                 material,
+//                 linkedProducts: [
+//                     {
+//                         name,
+//                         price,
+//                         images,
+//                         color,
+//                         colorCode,
+//                         description
+//                     }
+//                 ]
+//             });
+
+//             // Save the new product to the database
+//             const savedProduct = await newProduct.save();
+//             return res.status(201).json({
+//                 message: 'Product added successfully!',
+//                 product: savedProduct
+//             });
+//         }
+//     } catch (error) {
+//         res.status(500).json({
+//             message: 'Failed to add product',
+//             error: error.message
+//         });
+//     }
+// };
 
 const addProducts = async (req, res) => {
     try {
         const {
-            name,
-            description,
-            price,
-            images,
+            productId,
             linkedProducts,
-            color,
-            colorCode,
             category,
             material
         } = req.body;
 
         // Validate required fields
-        if (!name || !description || !price || !images || !color || !colorCode || !category || !material) {
+        if (!productId || !category || !material || !Array.isArray(linkedProducts) || linkedProducts.length === 0) {
             return res.status(400).json({
-                message: 'All required fields must be provided'
+                message: 'ProductId, category, material, and at least one linked product are required'
             });
         }
 
-        // Create new product
-        const newProduct = new Product({
-            name,
-            description,
-            price,
-            images,
-            linkedProducts: linkedProducts || [], // Default to empty array if not provided
-            color,
-            colorCode,
-            category,
-            material
-        });
+        // Validate each linked product
+        for (const product of linkedProducts) {
+            if (!product.name || !product.price || !Array.isArray(product.images) || 
+                product.images.length === 0 || !product.color || !product.colorCode || 
+                !product.description) {
+                return res.status(400).json({
+                    message: 'Each linked product must have name, price, images, color, colorCode, and description'
+                });
+            }
+        }
 
-        // Save the product to the database
-        const savedProduct = await newProduct.save();
-        res.status(201).json({
-            message: 'Product added successfully!',
-            product: savedProduct
-        });
+        // Check if the product already exists
+        const existingProduct = await Product.findOne({ productId });
+
+        if (existingProduct) {
+            // If the product exists, add the new linked products to the array
+            existingProduct.linkedProducts.push(...linkedProducts);
+
+            // Save the updated product
+            const updatedProduct = await existingProduct.save();
+            return res.status(200).json({
+                message: 'Linked products added successfully!',
+                product: updatedProduct
+            });
+        } else {
+            // If the product does not exist, create a new product
+            const newProduct = new Product({
+                productId,
+                linkedProducts,
+                category,
+                material
+            });
+
+            // Save the new product to the database
+            const savedProduct = await newProduct.save();
+            return res.status(201).json({
+                message: 'Product added successfully!',
+                product: savedProduct
+            });
+        }
     } catch (error) {
         res.status(500).json({
             message: 'Failed to add product',
@@ -65,26 +156,60 @@ const getAllProducts = async (req, res) => {
     }
 };
 
+// const getProduct = async (req, res) => {
+//     try {
+//         const product = await Product.findById(req.params.id)
+//             .populate('linkedProducts', 'name images price');
+//         if (!product) {
+//             return res.status(404).json({ message: 'Product not found' });
+//         }
+//         res.status(200).json({ message: 'Product retrieved successfully', product });
+//     } catch (error) {
+//         if (error.name === 'CastError') {
+//             return res.status(400).json({ message: 'Invalid product ID' });
+//         }
+//         res.status(500).json({ message: 'Failed to retrieve product', error: error.message });
+//     }
+// };
+
 const getProduct = async (req, res) => {
     try {
-        const product = await Product.findById(req.params.id)
-            .populate('linkedProducts', 'name images price'); // Populate basic info of linked products
-
+        const { id } = req.params;
+        
+        // First try to find product where the main _id matches
+        let product = await Product.findById(id);
+        
+        // If not found, try to find product where productId matches
         if (!product) {
-            return res.status(404).json({ message: 'Product not found' });
+            product = await Product.findOne({ productId: id });
         }
-
-        res.status(200).json({
-            message: 'Product retrieved successfully',
-            product
+        
+        // If still not found, try to find product containing the variant with matching _id
+        if (!product) {
+            product = await Product.findOne({
+                'linkedProducts._id': id
+            });
+        }
+        
+        if (!product) {
+            return res.status(404).json({ 
+                message: 'Product not found' 
+            });
+        }
+        
+        res.status(200).json({ 
+            message: 'Product retrieved successfully', 
+            product 
         });
     } catch (error) {
         if (error.name === 'CastError') {
-            return res.status(400).json({ message: 'Invalid product ID' });
+            return res.status(400).json({ 
+                message: 'Invalid product ID format' 
+            });
         }
-        res.status(500).json({
-            message: 'Failed to retrieve product',
-            error: error.message
+        res.status(500).json({ 
+            message: 'Failed to retrieve product', 
+            error: error.message 
         });
     }
 };
@@ -92,34 +217,15 @@ const getProduct = async (req, res) => {
 const deleteProduct = async (req, res) => {
     try {
         const product = await Product.findByIdAndDelete(req.params.id);
-
         if (!product) {
-            return res.status(404).json({
-                success: false,
-                message: 'Product not found'
-            });
+            return res.status(404).json({ message: 'Product not found' });
         }
-
-        // Remove this product from any other products' linkedProducts array
-        await Product.updateMany(
-            { linkedProducts: req.params.id },
-            { $pull: { linkedProducts: req.params.id } }
-        );
-
-        res.json({
-            success: true,
-            message: 'Product deleted successfully'
-        });
+        res.json({ message: 'Product deleted successfully', product });
     } catch (error) {
-        res.status(500).json({
-            success: false,
-            message: 'Failed to delete product',
-            error: error.message
-        });
+        res.status(500).json({ message: 'Failed to delete product', error: error.message });
     }
 };
 
-// Additional helper controller to update linked products
 const updateLinkedProducts = async (req, res) => {
     try {
         const { productId } = req.params;
@@ -130,76 +236,77 @@ const updateLinkedProducts = async (req, res) => {
             return res.status(404).json({ message: 'Product not found' });
         }
 
-        // Validate that all linkedProducts exist
         if (linkedProducts && linkedProducts.length > 0) {
-            const validProducts = await Product.find({
-                _id: { $in: linkedProducts }
-            });
-
+            const validProducts = await Product.find({ _id: { $in: linkedProducts } });
             if (validProducts.length !== linkedProducts.length) {
-                return res.status(400).json({
-                    message: 'One or more linked products do not exist'
-                });
+                return res.status(400).json({ message: 'One or more linked products do not exist' });
             }
         }
 
         product.linkedProducts = linkedProducts;
         const updatedProduct = await product.save();
 
-        res.status(200).json({
-            message: 'Linked products updated successfully',
-            product: updatedProduct
-        });
+        res.status(200).json({ message: 'Linked products updated successfully', product: updatedProduct });
     } catch (error) {
         if (error.name === 'CastError') {
             return res.status(400).json({ message: 'Invalid product ID' });
         }
-        res.status(500).json({
-            message: 'Failed to update linked products',
-            error: error.message
-        });
+        res.status(500).json({ message: 'Failed to update linked products', error: error.message });
     }
 };
 
 const updateProduct = async (req, res) => {
     try {
         const { id } = req.params;
-        const updateData = req.body;
+        const {
+            productId,
+            linkedProducts,
+            category,
+            material
+        } = req.body;
 
         // Validate required fields
-        if (!updateData.name || !updateData.description || !updateData.price ||
-            !updateData.images || !updateData.color || !updateData.colorCode ||
-            !updateData.category || !updateData.material) {
+        if (!productId || !category || !material) {
             return res.status(400).json({
-                message: 'All required fields must be provided'
+                message: 'ProductId, category, and material are required'
             });
         }
 
-        // Check if product exists
-        const product = await Product.findById(id);
-        if (!product) {
-            return res.status(404).json({ message: 'Product not found' });
-        }
-
-        // Validate linked products if provided
-        if (updateData.linkedProducts && updateData.linkedProducts.length > 0) {
-            const validProducts = await Product.find({
-                _id: { $in: updateData.linkedProducts }
-            });
-
-            if (validProducts.length !== updateData.linkedProducts.length) {
+        // If linkedProducts is provided, validate each one
+        if (linkedProducts) {
+            if (!Array.isArray(linkedProducts)) {
                 return res.status(400).json({
-                    message: 'One or more linked products do not exist'
+                    message: 'linkedProducts must be an array'
                 });
+            }
+
+            for (const product of linkedProducts) {
+                if (!product.name || !product.price || !Array.isArray(product.images) || 
+                    product.images.length === 0 || !product.color || !product.colorCode || 
+                    !product.description) {
+                    return res.status(400).json({
+                        message: 'Each linked product must have name, price, images, color, colorCode, and description'
+                    });
+                }
             }
         }
 
-        // Update the product
         const updatedProduct = await Product.findByIdAndUpdate(
             id,
-            updateData,
+            {
+                productId,
+                linkedProducts,
+                category,
+                material
+            },
             { new: true }
-        ).populate('linkedProducts', 'name images price');
+        );
+
+        if (!updatedProduct) {
+            return res.status(404).json({
+                message: 'Product not found'
+            });
+        }
 
         res.status(200).json({
             message: 'Product updated successfully',
@@ -207,7 +314,9 @@ const updateProduct = async (req, res) => {
         });
     } catch (error) {
         if (error.name === 'CastError') {
-            return res.status(400).json({ message: 'Invalid product ID' });
+            return res.status(400).json({
+                message: 'Invalid product ID'
+            });
         }
         res.status(500).json({
             message: 'Failed to update product',
