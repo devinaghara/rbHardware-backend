@@ -5,94 +5,6 @@ import { OTP } from "../Models/OTP.js";
 import crypto from "crypto";
 import { ResetPasswordEmail } from "../Config/resetPasswordEmail.js";
 
-// const CreateUser = async (req, res) => {
-//     try {
-//         const { name, email, password } = req.body;
-//         if (!validator.isEmail(email)) {
-//             return res.status(400).json({ message: "Invalid email", success: false });
-//         }
-//         const lowercaseEmail = email.toLowerCase();
-//         if (password.length < 6) {
-//             return res.status(400).json({ message: "Password length should be greater than 6", success: false });
-//         }
-//         const existingUser = await User.findOne({ email: lowercaseEmail });
-//         if (existingUser) {
-//             return res.status(400).json({ message: "User already exists", success: false });
-//         }
-//         const user = await User.create({ name: name, email: lowercaseEmail, password });
-//         req.session.user = user._id;
-//         res.status(201).json({ user });
-//     } catch (err) {
-//         res.status(400).json({ message: err.message });
-//     }
-// }
-
-// const LoginUser = async (req, res) => {
-//     try {
-//         const { email, password } = req.body;
-//         const user = await User.findOne({ email: email });
-//         if (!user) {
-//             return res.status(400).json({ message: "Invalid credentials", success: false });
-//         }
-//         const isPasswordCorrect = await user.comparePassword(password);
-//         if (!isPasswordCorrect) {
-//             return res.status(400).json({ message: "Invalid credentials", success: false });
-//         }
-//         req.session.user = user._id;
-//         res.status(200).json({ user });
-//     }
-//     catch (err) {
-//         res.status(400).json({ message: err.message });
-//     }
-// }
-
-// const logOut = async (req, res) => {
-//     try {
-//         console.log('Session at logout:', req.session); // Debug log
-//         console.log('Session ID:', req.sessionID); // Debug log
-
-//         // More permissive session check
-//         if (!req.session) {
-//             return res.status(401).json({
-//                 message: "Session not initialized",
-//                 success: false
-//             });
-//         }
-
-//         // Destroy session even if user ID is not present
-//         req.session.destroy((err) => {
-//             if (err) {
-//                 console.error('Session destruction error:', err); // Debug log
-//                 return res.status(500).json({
-//                     message: "Error during logout",
-//                     error: err.message,
-//                     success: false
-//                 });
-//             }
-
-//             // Clear session cookie
-//             res.clearCookie('connect.sid', {
-//                 path: '/',
-//                 httpOnly: true,
-//                 secure: process.env.NODE_ENV === 'production',
-//                 sameSite: 'strict'
-//             });
-
-//             return res.status(200).json({
-//                 message: "Logged out successfully",
-//                 success: true
-//             });
-//         });
-
-//     } catch (error) {
-//         console.error('Logout error:', error); // Debug log
-//         return res.status(500).json({
-//             error: error.message,
-//             success: false
-//         });
-//     }
-// };
-
 const getUser = async (req, res) => {
     try {
         if (req.session.user) {
@@ -146,106 +58,116 @@ const CreateUser = async (req, res) => {
     }
 }
 
+// Login user
 const LoginUser = async (req, res) => {
     try {
         const { email, password } = req.body;
-        const user = await User.findOne({ email: email.toLowerCase() });
-
+        
+        if (!email || !password) {
+            return res.status(400).json({
+                success: false,
+                message: 'Please provide email and password'
+            });
+        }
+        
+        // Find the user by email
+        const user = await User.findOne({ email });
+        
         if (!user) {
-            return res.status(404).json({
-                message: "User not found",
-                success: false
-            });
-        }
-
-        const isPasswordCorrect = await user.comparePassword(password);
-        if (!isPasswordCorrect) {
             return res.status(401).json({
-                message: "Invalid password",
-                success: false
+                success: false,
+                message: 'Invalid credentials'
             });
         }
-
-        // Store essential user data in session
-        req.session.user = {
-            _id: user._id,
-            email: user.email,
-            name: user.name
-        };
-
-        // Save session explicitly
-        await new Promise((resolve, reject) => {
-            req.session.save((err) => {
-                if (err) reject(err);
-                resolve();
-            });
-        });
-
-        console.log('Session after login:', req.session); // Debug log
-        console.log('Session ID:', req.sessionID); // Debug log
-
-        res.status(200).json({
-            message: "Login successful",
-            user: {
-                _id: user._id,
-                name: user.name,
-                email: user.email,
-                role: user.role
-            },
-            success: true
-        });
-    }
-    catch (err) {
-        console.error('Login error:', err); // Debug log
-        res.status(500).json({
-            message: err.message,
-            success: false
-        });
-    }
-}
-
-const logOut = async (req, res) => {
-    try {
-        console.log('Session at logout:', req.session); // Debug log
-        console.log('Session ID:', req.sessionID); // Debug log
-
-        if (!req.session) {
+        
+        // Check if password matches
+        const isMatch = await user.comparePassword(password);
+        
+        if (!isMatch) {
             return res.status(401).json({
-                message: "Session not initialized",
-                success: false
+                success: false,
+                message: 'Invalid credentials'
             });
         }
-
-        // Destroy session
-        req.session.destroy((err) => {
-            if (err) {
-                console.error('Session destruction error:', err); // Debug log
-                return res.status(500).json({
-                    message: "Error during logout",
-                    error: err.message,
-                    success: false
+        
+        // Transfer session cart items to user's cart if they exist
+        if (req.session.cart && req.session.cart.items && req.session.cart.items.length > 0) {
+            // Add each session cart item to user's cart
+            for (const item of req.session.cart.items) {
+                await user.addToCart({
+                    productId: item.productId,
+                    name: item.name,
+                    price: item.price,
+                    quantity: item.quantity,
+                    image: item.image,
+                    color: item.color,
+                    size: item.size
                 });
             }
+            
+            // Clear session cart after transfer
+            req.session.cart = { items: [] };
+        }
+        
+        // Set user in session
+        req.session.user = {
+            _id: user._id,
+            name: user.name,
+            email: user.email,
+            role: user.role
+        };
+        
+        // Save session
+        req.session.save(err => {
+            if (err) {
+                console.error('Session save error:', err);
+            }
+        });
+        
+        // Remove password from response
+        user.password = undefined;
+        
+        res.status(200).json({
+            success: true,
+            message: 'Login successful',
+            user
+        });
+    } catch (error) {
+        console.error('Login error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Login failed',
+            error: error.message
+        });
+    }
+};
 
-            // Clear session cookie with secure options
-            res.clearCookie('connect.sid', {
-                path: '/',
-                httpOnly: true,
-                secure: process.env.NODE_ENV === 'production',
-                sameSite: 'strict'
-            });
-
-            return res.status(200).json({
-                message: "Logged out successfully",
-                success: true
+// Logout user
+const logOut = async (req, res) => {
+    try {
+        req.session.destroy(err => {
+            if (err) {
+                console.error('Session destruction error:', err);
+                return res.status(500).json({
+                    success: false,
+                    message: 'Logout failed',
+                    error: err.message
+                });
+            }
+            
+            res.clearCookie('connect.sid'); // Adjust cookie name based on your session config
+            
+            res.status(200).json({
+                success: true,
+                message: 'Logged out successfully'
             });
         });
-
     } catch (error) {
-        console.error('Logout error:', error); // Debug log
-        return res.status(500).json({
-            error: error.message,
-            success: false
+        console.error('Logout error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Logout failed',
+            error: error.message
         });
     }
 };

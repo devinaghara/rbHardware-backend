@@ -12,7 +12,7 @@ const app = express();
 
 app.use(cors({
   origin: 'http://localhost:5173', // Replace with your frontend URL
-  methods: ['GET', 'POST', 'PUT', 'DELETE'],
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
   credentials: true, // Allow cookies to be sent with requests
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
@@ -69,6 +69,7 @@ app.use(
     cookie: {
       maxAge: 24 * 60 * 60 * 1000,
       secure: false,
+      secure: process.env.NODE_ENV === 'production',
       httpOnly: true,
       sameSite: "lax",
     },
@@ -89,10 +90,14 @@ import ProductRoutes from "./Routes/Product.routes.js";
 import ColorRoutes from "./Routes/Color.routes.js";
 import MaterialRoutes from "./Routes/Material.routes.js";
 import CategoryRoutes from "./Routes/Category.routes.js";
+import AddressRoutes from "./Routes/Address.routes.js"
+import CartRoutes from "./Routes/Cart.routes.js"
 
 app.use("/auth", AuthRoutes);
 app.use("/plist", ProductRoutes);
 app.use("/colorfilter", ColorRoutes);
 app.use("/materialfilter", MaterialRoutes);
 app.use("/categoryfilter", CategoryRoutes);
+app.use("/api/addresses", AddressRoutes)
+app.use("/api/cart", CartRoutes)
 
