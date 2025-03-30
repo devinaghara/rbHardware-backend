@@ -100,5 +100,3 @@ app.use("/materialfilter", MaterialRoutes);
 app.use("/categoryfilter", CategoryRoutes);
 app.use("/api/addresses", AddressRoutes)
 app.use("/api/cart", CartRoutes)
-
-module.exports = app;
