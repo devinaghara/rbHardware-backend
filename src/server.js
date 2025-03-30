@@ -11,7 +11,7 @@ import cors from "cors"
 const app = express();
 
 app.use(cors({
-  origin: 'http://localhost:5173', // Replace with your frontend URL
+  origin: ['http://localhost:5173', 'https://www.rbhardware.in'],
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
   credentials: true, // Allow cookies to be sent with requests
   allowedHeaders: ['Content-Type', 'Authorization']
