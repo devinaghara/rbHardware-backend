@@ -10,12 +10,15 @@ import cors from "cors"
 
 const app = express();
 
+
 app.use(cors({
   origin: ['http://localhost:5173', 'https://www.rbhardware.in'],
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
-  credentials: true, 
+  credentials: true,
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
+
+app.set("trust proxy", 1);
 
 dotenv.config();
 app.use(express.json({ limit: "16kb" }));
@@ -73,6 +76,7 @@ app.use(
       httpOnly: true,
       sameSite: "none",
     },
+    proxy: true,
     name: "user",
     store: MongoStore.create({
       client: mongoose.connection.getClient(),
