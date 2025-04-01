@@ -13,7 +13,7 @@ const app = express();
 app.use(cors({
   origin: ['http://localhost:5173', 'https://www.rbhardware.in'],
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
-  credentials: true, // Allow cookies to be sent with requests
+  credentials: true, 
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
@@ -65,13 +65,13 @@ app.use(
   session({
     secret: process.env.Session_Secret || "secret",
     resave: false,
-    saveUninitialized: false,
+    saveUninitialized: true,
     cookie: {
       maxAge: 24 * 60 * 60 * 1000,
-      secure: false,
+      secure: true,
       secure: process.env.NODE_ENV === 'production',
       httpOnly: true,
-      sameSite: "lax",
+      sameSite: "none",
     },
     name: "user",
     store: MongoStore.create({
