@@ -96,6 +96,7 @@ import MaterialRoutes from "./Routes/Material.routes.js";
 import CategoryRoutes from "./Routes/Category.routes.js";
 import AddressRoutes from "./Routes/Address.routes.js"
 import CartRoutes from "./Routes/Cart.routes.js"
+import OrderRoutes from "./Routes/Order.routes.js"
 
 app.use("/auth", AuthRoutes);
 app.use("/plist", ProductRoutes);
@@ -104,3 +105,4 @@ app.use("/materialfilter", MaterialRoutes);
 app.use("/categoryfilter", CategoryRoutes);
 app.use("/api/addresses", AddressRoutes)
 app.use("/api/cart", CartRoutes)
+app.use("/order", OrderRoutes)
