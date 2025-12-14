@@ -80,7 +80,7 @@ const createOrder = async (req, res) => {
         status: "Pending",
         method: paymentMethod,
       },
-      totalAmount: total, // Use totalAmount for consistency with frontend
+      total: total,  // Use totalAmount for consistency with frontend
       status: "Processing", // Start with Processing status
       statusHistory: [
         {
@@ -99,7 +99,7 @@ const createOrder = async (req, res) => {
 
     // Clear user's cart after successful order
     user.cart.items = [];
-    user.cart.totalAmount = 0;
+    user.cart.totaln = 0;
     user.cart.lastUpdated = new Date();
 
     // Save user with new order and empty cart
