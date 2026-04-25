@@ -16,7 +16,7 @@ const router = Router();
 // ─── Public routes ───────────────────────────────────────────────────────────
 router.post("/sign-up", CreateUser);
 router.post("/login", LoginUser);
-router.get("/logout", logOut);
+router.post("/logout", logOut);
 router.get("/me", getUser);
 
 // ─── OTP & Password Reset (public) ──────────────────────────────────────────

@@ -41,7 +41,7 @@ const sanitizeText = (text, maxLength = 500) => {
  */
 const createOrder = async (req, res) => {
   try {
-    const userId = req.session.user._id;
+    const userId = req.user._id;
     const {
       shippingAddress,
       paymentMethod,
@@ -241,7 +241,7 @@ const createOrder = async (req, res) => {
  */
 const getUserOrders = async (req, res) => {
   try {
-    const userId = req.session.user._id;
+    const userId = req.user._id;
 
     const orders = await Order.find({ userId })
       .sort({ createdAt: -1 })
@@ -267,7 +267,7 @@ const getUserOrders = async (req, res) => {
  */
 const getOrderById = async (req, res) => {
   try {
-    const userId = req.session.user._id;
+    const userId = req.user._id;
     const { orderId } = req.params;
 
     if (!orderId) {
@@ -314,7 +314,7 @@ const getOrderById = async (req, res) => {
  */
 const cancelOrder = async (req, res) => {
   try {
-    const userId = req.session.user._id;
+    const userId = req.user._id;
     const { orderId } = req.params;
     const { reason } = req.body;
 

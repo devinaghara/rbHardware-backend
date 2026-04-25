@@ -233,37 +233,33 @@ const LoginUser = async (req, res) => {
 };
 
 // ─── GET /auth/logout — Destroy session ──────────────────────────────────────
+// ✅ Fix — nest destroy() inside logout callback
 const logOut = async (req, res) => {
   try {
-    // Passport logout (for Google OAuth users)
-    if (req.logout) {
-      req.logout((err) => {
-        if (err) console.error("Passport logout error:", err);
-      });
-    }
-
-    req.session.destroy((err) => {
+    req.logout((err) => {
       if (err) {
-        console.error("Session destruction error:", err);
-        return res.status(500).json({
-          success: false,
-          message: "Logout failed",
-        });
+        console.error("Passport logout error:", err);
+        return res.status(500).json({ success: false, message: "Logout failed" });
       }
 
-      res.clearCookie("user"); // Must match session name in server.js
+      req.session.destroy((err) => {
+        if (err) {
+          console.error("Session destruction error:", err);
+          return res.status(500).json({ success: false, message: "Logout failed" });
+        }
 
-      res.status(200).json({
-        success: true,
-        message: "Logged out successfully",
+        res.clearCookie("user", {
+          httpOnly: true,
+          secure: process.env.NODE_ENV === "production",
+          sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
+        });
+
+        return res.status(200).json({ success: true, message: "Logged out successfully" });
       });
     });
   } catch (error) {
     console.error("Logout error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Logout failed",
-    });
+    res.status(500).json({ success: false, message: "Logout failed" });
   }
 };
 

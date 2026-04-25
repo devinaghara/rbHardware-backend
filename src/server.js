@@ -23,10 +23,10 @@ import PaymentRoutes from "./Routes/Payment.routes.js";
 const app = express();
 
 app.use(cors({
-  origin: [process.env.FRONTEND_URL || "http://localhost:5173", "https://www.rbhardware.in"],
+  origin: [process.env.FRONTEND_URL || "http://localhost:5173", "https://www.rbhardware.in", "https://rbhardware.in"],
   methods: ["GET", "POST", "PUT", "DELETE", "PATCH"],
   credentials: true,
-  allowedHeaders: ["Content-Type", "Authorization", "Access-Control-Allow-Credentials"],
+  allowedHeaders: ["Content-Type", "Authorization"],
 }));
 
 app.set("trust proxy", 1);
@@ -57,9 +57,26 @@ connectDB()
         collectionName: "sessions",
         stringify: false,
         autoRemove: "interval",
-        autoRemoveInterval: 1,
+        autoRemoveInterval: 10,
       }),
     }));
+
+    // ✅ Passport session shim — prevents server crash when MongoStore has a connection blip
+    // Passport v0.7+ calls req.session.regenerate() and req.session.save() internally.
+    // If MongoStore momentarily fails, req.session can be undefined, crashing the server.
+    app.use((req, res, next) => {
+      if (!req.session) {
+        req.session = {
+          regenerate: (cb) => cb(),
+          save: (cb) => cb(),
+          destroy: (cb) => cb(),
+        };
+        return next();
+      }
+      if (!req.session.regenerate) req.session.regenerate = (cb) => cb();
+      if (!req.session.save) req.session.save = (cb) => cb();
+      next();
+    });
 
     // ✅ Passport AFTER session
     app.use(passport.initialize());
