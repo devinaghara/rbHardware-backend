@@ -84,106 +84,6 @@ const wishlistItemSchema = new mongoose.Schema({
   },
 });
 
-// Order Item Schema
-const orderItemSchema = new mongoose.Schema({
-  productId: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: "Product",
-    required: true,
-  },
-  name: {
-    type: String,
-    required: true,
-  },
-  price: {
-    type: Number,
-    required: true,
-  },
-  quantity: {
-    type: Number,
-    required: true,
-  },
-  image: {
-    type: String,
-  },
-  color: {
-    type: String,
-    default: null,
-  },
-  size: {
-    type: String,
-    default: null,
-  },
-});
-
-// Order Schema
-const orderSchema = new mongoose.Schema(
-  {
-    orderId: {
-      type: String,
-      required: true,
-      // unique: true
-    },
-    items: [orderItemSchema],
-    shippingAddress: {
-      type: addressSchema,
-      required: true,
-    },
-    paymentMethod: {
-      type: String,
-      required: true,
-    },
-    paymentDetails: {
-      id: String,
-      status: String,
-      method: String,
-    },
-    total: {
-      type: Number,
-      required: true,
-    },
-    status: {
-      type: String,
-      enum: ["Pending", "Processing", "In Transit", "Delivered", "Cancelled"],
-      default: "Pending",
-    },
-    statusHistory: [
-      {
-        status: {
-          type: String,
-          enum: [
-            "Pending",
-            "Processing",
-            "In Transit",
-            "Delivered",
-            "Cancelled",
-          ],
-        },
-        timestamp: {
-          type: Date,
-          default: Date.now,
-        },
-        comment: String,
-      },
-    ],
-    trackingNumber: {
-      type: String,
-      default: null,
-    },
-    estimatedDelivery: {
-      type: Date,
-      default: null,
-    },
-    notes: {
-      type: String,
-      default: null,
-    },
-  },
-  {
-    timestamps: true,
-  }
-);
-
 // Main User Schema
 const userSchema = new mongoose.Schema(
   {
@@ -195,10 +95,17 @@ const userSchema = new mongoose.Schema(
       type: String,
       required: true,
       unique: true,
+      lowercase: true,
     },
     password: {
       type: String,
-      required: true,
+      required: false, // Optional — Google-only users don't have a password
+      default: null,
+    },
+    googleId: {
+      type: String,
+      default: null,
+      sparse: true,
     },
     phone: {
       type: String,
@@ -221,7 +128,6 @@ const userSchema = new mongoose.Schema(
       },
     },
     wishlist: [wishlistItemSchema],
-    orders: [orderSchema],
     isVerified: {
       type: Boolean,
       default: false,
@@ -264,11 +170,7 @@ const userSchema = new mongoose.Schema(
 
 // Password hashing middleware
 userSchema.pre("save", async function (next) {
-  if (!this.isModified("password")) return next();
-
-  if (!this.password) {
-    return next(new Error("Password is required for hashing"));
-  }
+  if (!this.isModified("password") || !this.password) return next();
 
   this.password = await bcrypt.hash(this.password, 12);
   next();
@@ -314,8 +216,9 @@ userSchema.pre("save", function (next) {
   next();
 });
 
-// Method to compare password
+// Method to compare password — returns false for Google-only accounts
 userSchema.methods.comparePassword = async function (password) {
+  if (!this.password) return false;
   return await bcrypt.compare(password, this.password);
 };
 

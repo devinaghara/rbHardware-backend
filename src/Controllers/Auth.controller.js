@@ -3,6 +3,7 @@ import validator from "validator";
 import {
   sendOTPEmail,
   generateOTP,
+  hashOTP,
   verifyOTP,
   isValidEmail,
 } from "../Config/email.config.js";
@@ -10,67 +11,136 @@ import { OTP } from "../Models/OTP.js";
 import crypto from "crypto";
 import { ResetPasswordEmail } from "../Config/resetPasswordEmail.js";
 
+// ─── Helper: save session as a proper Promise ────────────────────────────────
+const saveSession = (req) =>
+  new Promise((resolve, reject) => {
+    req.session.save((err) => {
+      if (err) reject(err);
+      else resolve();
+    });
+  });
+
+// ─── Helper: sanitize text input ─────────────────────────────────────────────
+const sanitizeName = (name) => {
+  if (!name || typeof name !== "string") return null;
+  const trimmed = name.trim();
+  if (trimmed.length < 2 || trimmed.length > 50) return null;
+  return trimmed;
+};
+
+// ─── GET /auth/me — Check current session ────────────────────────────────────
 const getUser = async (req, res) => {
   try {
-    if (req.session.user) {
-      const user = await User.findById(req.session.user);
-      res.status(200).json({ user });
-    } else {
-      res.status(401).json({ message: "Unauthorized" });
+    // Check Passport-authenticated user (Google OAuth)
+    if (req.user) {
+      return res.status(200).json({ user: req.user });
     }
+
+    // Check session-authenticated user (email/password login)
+    if (req.session?.user?._id) {
+      const user = await User.findById(req.session.user._id).select("-password");
+      if (user) {
+        return res.status(200).json({ user });
+      }
+    }
+
+    return res.status(401).json({ message: "Unauthorized" });
   } catch (err) {
-    res.status(400).json({ message: err.message });
+    res.status(500).json({ message: "Internal server error" });
   }
 };
 
+// ─── POST /auth/sign-up — Register a new user ───────────────────────────────
 const CreateUser = async (req, res) => {
   try {
-    const { name, email, password } = req.body;
-    if (!validator.isEmail(email)) {
-      return res.status(400).json({ message: "Invalid email", success: false });
-    }
-    const lowercaseEmail = email.toLowerCase();
-    if (password.length < 6) {
+    const { name, email, password, otpToken } = req.body;
+
+    // Validate name
+    const cleanName = sanitizeName(name);
+    if (!cleanName) {
       return res.status(400).json({
-        message: "Password length should be greater than 6",
+        message: "Name must be 2-50 characters",
         success: false,
       });
     }
+
+    // Validate email
+    if (!email || !validator.isEmail(email)) {
+      return res.status(400).json({
+        message: "Valid email is required",
+        success: false,
+      });
+    }
+
+    // Validate password
+    if (!password || password.length < 6) {
+      return res.status(400).json({
+        message: "Password must be at least 6 characters",
+        success: false,
+      });
+    }
+
+    const lowercaseEmail = email.toLowerCase();
+
+    // Verify OTP token — signup requires a verified OTP
+    if (!otpToken) {
+      return res.status(400).json({
+        message: "Email verification is required",
+        success: false,
+      });
+    }
+
+    // Validate the OTP token
+    const isOTPValid = await verifyOTP(lowercaseEmail, otpToken);
+    if (!isOTPValid) {
+      return res.status(400).json({
+        message: "Invalid or expired verification code",
+        success: false,
+      });
+    }
+
+    // Delete all OTPs for this email — they're consumed after verification
+    await OTP.deleteMany({ email: lowercaseEmail });
+
+    // Check if user already exists
     const existingUser = await User.findOne({ email: lowercaseEmail });
     if (existingUser) {
-      return res
-        .status(400)
-        .json({ message: "User already exists", success: false });
+      return res.status(400).json({
+        message: "User already exists",
+        success: false,
+      });
     }
+
+    // Create user
     const user = await User.create({
-      name: name,
+      name: cleanName,
       email: lowercaseEmail,
       password,
+      isVerified: true,
     });
 
-    // Store essential user data in session
+    // Store session — include all fields needed by middleware
     req.session.user = {
       _id: user._id,
+      name: user.name,
       email: user.email,
+      role: user.role,
     };
 
-    // Save session explicitly
-    await new Promise((resolve, reject) => {
-      req.session.save((err) => {
-        if (err) reject(err);
-        resolve();
-      });
-    });
+    await saveSession(req);
 
-    console.log("Session after registration:", req.session); // Debug log
-    res.status(201).json({ user });
+    // Return user WITHOUT password
+    const userResponse = user.toObject();
+    delete userResponse.password;
+
+    res.status(201).json({ user: userResponse, success: true });
   } catch (err) {
-    console.error("Registration error:", err); // Debug log
+    console.error("Registration error:", err);
     res.status(400).json({ message: err.message, success: false });
   }
 };
 
-// Login user
+// ─── POST /auth/login — Email/password login ─────────────────────────────────
 const LoginUser = async (req, res) => {
   try {
     const { email, password } = req.body;
@@ -83,12 +153,21 @@ const LoginUser = async (req, res) => {
     }
 
     // Find the user by email
-    const user = await User.findOne({ email });
+    const user = await User.findOne({ email: email.toLowerCase() });
 
+    // Don't reveal whether email exists — use same message for both cases
     if (!user) {
       return res.status(401).json({
         success: false,
         message: "Invalid credentials",
+      });
+    }
+
+    // Google-only accounts don't have a password
+    if (!user.password) {
+      return res.status(401).json({
+        success: false,
+        message: "This account uses Google login. Please sign in with Google.",
       });
     }
 
@@ -108,7 +187,6 @@ const LoginUser = async (req, res) => {
       req.session.cart.items &&
       req.session.cart.items.length > 0
     ) {
-      // Add each session cart item to user's cart
       for (const item of req.session.cart.items) {
         await user.addToCart({
           productId: item.productId,
@@ -125,7 +203,7 @@ const LoginUser = async (req, res) => {
       req.session.cart = { items: [] };
     }
 
-    // Set user in session
+    // Set user in session — include all fields needed by middleware
     req.session.user = {
       _id: user._id,
       name: user.name,
@@ -133,45 +211,47 @@ const LoginUser = async (req, res) => {
       role: user.role,
     };
 
-    // Save session
-    req.session.save((err) => {
-      if (err) {
-        console.error("Session save error:", err);
-      }
-    });
+    // Wait for session save before responding
+    await saveSession(req);
 
     // Remove password from response
-    user.password = undefined;
+    const userResponse = user.toObject();
+    delete userResponse.password;
 
     res.status(200).json({
       success: true,
       message: "Login successful",
-      user,
+      user: userResponse,
     });
   } catch (error) {
     console.error("Login error:", error);
     res.status(500).json({
       success: false,
       message: "Login failed",
-      error: error.message,
     });
   }
 };
 
-// Logout user
+// ─── GET /auth/logout — Destroy session ──────────────────────────────────────
 const logOut = async (req, res) => {
   try {
+    // Passport logout (for Google OAuth users)
+    if (req.logout) {
+      req.logout((err) => {
+        if (err) console.error("Passport logout error:", err);
+      });
+    }
+
     req.session.destroy((err) => {
       if (err) {
         console.error("Session destruction error:", err);
         return res.status(500).json({
           success: false,
           message: "Logout failed",
-          error: err.message,
         });
       }
 
-      res.clearCookie("connect.sid"); // Adjust cookie name based on your session config
+      res.clearCookie("user"); // Must match session name in server.js
 
       res.status(200).json({
         success: true,
@@ -183,19 +263,29 @@ const logOut = async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Logout failed",
-      error: error.message,
     });
   }
 };
 
+// ─── PUT /auth/update-profile ────────────────────────────────────────────────
 const updateProfile = async (req, res) => {
   try {
     const { name, email, phone } = req.body;
-    const userId = req.session.user;
+    const userId = req.session?.user?._id;
 
-    // Check if user is authenticated
     if (!userId) {
       return res.status(401).json({ message: "Unauthorized", success: false });
+    }
+
+    // Validate name if provided
+    if (name !== undefined) {
+      const cleanName = sanitizeName(name);
+      if (!cleanName) {
+        return res.status(400).json({
+          message: "Name must be 2-50 characters",
+          success: false,
+        });
+      }
     }
 
     // Validate email if provided
@@ -209,7 +299,7 @@ const updateProfile = async (req, res) => {
       // Check if new email already exists for another user
       const existingUser = await User.findOne({
         email: email.toLowerCase(),
-        _id: { $ne: userId }, // exclude current user
+        _id: { $ne: userId },
       });
 
       if (existingUser) {
@@ -232,13 +322,13 @@ const updateProfile = async (req, res) => {
     const updatedUser = await User.findByIdAndUpdate(
       userId,
       {
-        ...(name && { name }),
+        ...(name && { name: sanitizeName(name) }),
         ...(email && { email: email.toLowerCase() }),
         ...(phone && { phone }),
       },
       {
         new: true,
-        select: "-password", // Exclude password from the response
+        select: "-password",
       }
     );
 
@@ -248,6 +338,15 @@ const updateProfile = async (req, res) => {
         success: false,
       });
     }
+
+    // Update session to reflect changes
+    req.session.user = {
+      _id: updatedUser._id,
+      name: updatedUser.name,
+      email: updatedUser.email,
+      role: updatedUser.role,
+    };
+    await saveSession(req);
 
     res.status(200).json({
       message: "Profile updated successfully",
@@ -262,12 +361,13 @@ const updateProfile = async (req, res) => {
   }
 };
 
+// ─── OTP & Password Reset ────────────────────────────────────────────────────
 export const authVerifyController = {
+  // POST /auth/send-otp
   async sendOTP(req, res) {
     try {
       const { email } = req.body;
 
-      // Validate request
       if (!email) {
         return res.status(400).json({ error: "Email is required" });
       }
@@ -276,29 +376,32 @@ export const authVerifyController = {
         return res.status(400).json({ error: "Invalid email format" });
       }
 
-      // Check for existing non-expired OTP
+      const lowercaseEmail = email.toLowerCase();
+
+      // Check for existing non-expired OTP (rate limiting)
       const existingOTP = await OTP.findOne({
-        email,
+        email: lowercaseEmail,
         expiresAt: { $gt: new Date() },
       });
 
       if (existingOTP) {
-        return res.status(400).json({
+        return res.status(429).json({
           error:
             "An OTP has already been sent. Please wait before requesting a new one.",
         });
       }
 
       const otp = generateOTP();
+      const hashedOTP = await hashOTP(otp);
 
-      // Save OTP to database
+      // Save hashed OTP to database — plaintext is never stored
       await OTP.create({
-        email,
-        otp,
+        email: lowercaseEmail,
+        otp: hashedOTP,
         expiresAt: new Date(Date.now() + 10 * 60 * 1000), // 10 minutes
       });
 
-      await sendOTPEmail(email, otp);
+      await sendOTPEmail(lowercaseEmail, otp);
 
       res.status(200).json({
         message: "OTP sent successfully",
@@ -307,7 +410,6 @@ export const authVerifyController = {
     } catch (error) {
       console.error("OTP sending error:", error);
 
-      // Send appropriate error message based on the error type
       const errorMessage =
         error.message === "Failed to send OTP email"
           ? "Failed to send OTP email. Please try again later."
@@ -317,29 +419,58 @@ export const authVerifyController = {
     }
   },
 
+  // POST /auth/verify-otp — Verifies OTP and returns the verified OTP token for signup
   async verifyOTPHandler(req, res) {
     try {
       const { email, otp } = req.body;
-      const isValid = await verifyOTP(email, otp);
+
+      if (!email || !otp) {
+        return res.status(400).json({ error: "Email and OTP are required" });
+      }
+
+      const lowercaseEmail = email.toLowerCase();
+      const isValid = await verifyOTP(lowercaseEmail, otp);
 
       if (!isValid) {
         return res.status(400).json({ error: "Invalid or expired OTP" });
       }
 
-      await OTP.deleteOne({ email, otp });
-      res.status(200).json({ message: "OTP verified successfully" });
+      // Return the OTP as a verification token — signup will validate it again
+      res.status(200).json({
+        message: "OTP verified successfully",
+        otpToken: otp,
+      });
     } catch (error) {
-      res.status(500).json({ error: error.message });
+      res.status(500).json({ error: "Verification failed" });
     }
   },
 
+  // POST /auth/forgot-password
   async forgotPassword(req, res) {
     try {
       const { email } = req.body;
-      const user = await User.findOne({ email });
+
+      if (!email || !validator.isEmail(email)) {
+        return res.status(400).json({
+          error: "Valid email is required",
+        });
+      }
+
+      // Always return the same response to prevent user enumeration
+      const genericResponse = {
+        message: "If that email exists, a password reset link has been sent",
+      };
+
+      const user = await User.findOne({ email: email.toLowerCase() });
 
       if (!user) {
-        return res.status(404).json({ error: "User not found" });
+        // Return OK even if user doesn't exist — prevents enumeration
+        return res.status(200).json(genericResponse);
+      }
+
+      // Google-only accounts can't reset password
+      if (!user.password && user.googleId) {
+        return res.status(200).json(genericResponse);
       }
 
       const resetToken = crypto.randomBytes(32).toString("hex");
@@ -352,14 +483,27 @@ export const authVerifyController = {
       await user.save();
 
       const resetUrl = `${process.env.FRONTEND_URL}/reset-password/${resetToken}`;
-      await ResetPasswordEmail(email, resetUrl);
 
-      res.status(200).json({ message: "Password reset email sent" });
+      try {
+        await ResetPasswordEmail(user.email, resetUrl);
+      } catch (emailError) {
+        // Roll back token if email fails
+        user.passwordResetToken = undefined;
+        user.passwordResetExpires = undefined;
+        await user.save();
+        return res.status(500).json({
+          error: "Failed to send reset email. Please try again.",
+        });
+      }
+
+      res.status(200).json(genericResponse);
     } catch (error) {
-      res.status(500).json({ error: error.message });
+      console.error("Forgot password error:", error);
+      res.status(500).json({ error: "An error occurred" });
     }
   },
 
+  // POST /auth/reset-password
   async resetPassword(req, res) {
     try {
       const { token, newPassword } = req.body;
@@ -367,6 +511,13 @@ export const authVerifyController = {
       if (!token || !newPassword) {
         return res.status(400).json({
           error: "Please provide both token and new password",
+        });
+      }
+
+      // Validate password strength
+      if (newPassword.length < 6) {
+        return res.status(400).json({
+          error: "Password must be at least 6 characters",
         });
       }
 
@@ -411,10 +562,10 @@ export const authVerifyController = {
   },
 };
 
-// Get profile information
+// ─── GET /auth/get-profile ───────────────────────────────────────────────────
 const getProfile = async (req, res) => {
   try {
-    const userId = req.session.user;
+    const userId = req.session?.user?._id;
 
     if (!userId) {
       return res.status(401).json({
@@ -437,8 +588,8 @@ const getProfile = async (req, res) => {
       success: true,
     });
   } catch (err) {
-    res.status(400).json({
-      message: err.message,
+    res.status(500).json({
+      message: "Internal server error",
       success: false,
     });
   }

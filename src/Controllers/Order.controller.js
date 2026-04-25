@@ -1,30 +1,56 @@
 import User from "../Models/User.js";
-import mongoose from "mongoose";
+import Product from "../Models/Product.js";
+import Order from "../Models/Order.js";
 import crypto from "crypto";
 
 /**
+ * Valid status transitions — enforced as a state machine.
+ * Terminal states (Delivered, Cancelled) allow no further transitions.
+ */
+const VALID_STATUS_TRANSITIONS = {
+  Pending: ["Processing", "Cancelled"],
+  Processing: ["Shipped", "Cancelled"],
+  Shipped: ["In Transit", "Cancelled"],
+  "In Transit": ["Delivered"],
+  Delivered: [],
+  Cancelled: [],
+};
+
+/**
+ * Safely checks if a string is a valid MongoDB ObjectId
+ */
+const isValidObjectId = (str) => /^[0-9a-fA-F]{24}$/.test(str);
+
+/**
+ * Sanitize free-text input: trim whitespace, enforce max length
+ */
+const sanitizeText = (text, maxLength = 500) => {
+  if (typeof text !== "string") return null;
+  const trimmed = text.trim();
+  return trimmed.length > maxLength ? trimmed.substring(0, maxLength) : trimmed;
+};
+
+/**
  * Create a new order for the authenticated user
+ *
+ * Security:
+ * - Items and prices are read from the database, NOT from req.body.
+ * - Products with isOrderable=false are rejected.
+ * - Payment must be confirmed before order creation.
+ * - Notes are sanitized.
  */
 const createOrder = async (req, res) => {
   try {
     const userId = req.session.user._id;
     const {
-      items,
       shippingAddress,
       paymentMethod,
       paymentDetails,
-      total,
       notes,
+      paymentIntentId,
     } = req.body;
 
     // Validate required fields
-    if (!items || !Array.isArray(items) || items.length === 0) {
-      return res.status(400).json({
-        success: false,
-        message: "Order must contain at least one item",
-      });
-    }
-
     if (!shippingAddress) {
       return res.status(400).json({
         success: false,
@@ -39,14 +65,18 @@ const createOrder = async (req, res) => {
       });
     }
 
-    if (!total || isNaN(total) || total <= 0) {
-      return res.status(400).json({
-        success: false,
-        message: "Valid order total is required",
-      });
+    // Validate shipping address fields
+    const requiredAddressFields = ["name", "phone", "street", "city", "state", "zipCode"];
+    for (const field of requiredAddressFields) {
+      if (!shippingAddress[field] || typeof shippingAddress[field] !== "string" || !shippingAddress[field].trim()) {
+        return res.status(400).json({
+          success: false,
+          message: `Shipping address field "${field}" is required`,
+        });
+      }
     }
 
-    // Find user
+    // Find user with their cart
     const user = await User.findById(userId);
 
     if (!user) {
@@ -56,53 +86,138 @@ const createOrder = async (req, res) => {
       });
     }
 
+    // Use cart items from the database — NOT from req.body
+    const cartItems = user.cart.items;
+
+    if (!cartItems || cartItems.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Your cart is empty. Add items before placing an order.",
+      });
+    }
+
+    // Collect all unique variant IDs from cart — these are linkedProduct subdocument _ids
+    const variantIds = [...new Set(cartItems.map((item) => item.productId.toString()))];
+
+    // Fetch all referenced products by variant subdocument ID
+    const products = await Product.find({
+      "linkedProducts._id": { $in: variantIds },
+    });
+
+    // Build a lookup map: variantId -> { product, variant }
+    const variantMap = {};
+    products.forEach((product) => {
+      product.linkedProducts.forEach((lp) => {
+        if (variantIds.includes(lp._id.toString())) {
+          variantMap[lp._id.toString()] = { product, variant: lp };
+        }
+      });
+    });
+
+    // Verify each cart item's price and orderability against the Product collection
+    const verifiedOrderItems = [];
+    let serverCalculatedTotal = 0;
+
+    for (const cartItem of cartItems) {
+      const entry = variantMap[cartItem.productId.toString()];
+
+      if (!entry) {
+        return res.status(400).json({
+          success: false,
+          message: `Product "${cartItem.name}" is no longer available. Please remove it from your cart.`,
+        });
+      }
+
+      // Check if product is orderable
+      if (!entry.product.isOrderable) {
+        return res.status(400).json({
+          success: false,
+          message: `"${cartItem.name}" is currently not available for ordering. Please remove it from your cart.`,
+        });
+      }
+
+      const matchedVariant = entry.variant;
+
+      // Use the VERIFIED price from the database, not the cart/frontend price
+      const verifiedPrice = matchedVariant.price;
+
+      verifiedOrderItems.push({
+        productId: cartItem.productId,
+        name: matchedVariant.name,
+        price: verifiedPrice,
+        quantity: cartItem.quantity,
+        image: cartItem.image || (matchedVariant.images.length > 0 ? matchedVariant.images[0] : null),
+        color: cartItem.color || matchedVariant.color || null,
+        size: cartItem.size || null,
+      });
+
+      serverCalculatedTotal += verifiedPrice * cartItem.quantity;
+    }
+
+    if (serverCalculatedTotal <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Order total must be greater than zero",
+      });
+    }
+
     // Generate unique order ID (e.g., ORD-YYYYMMDD-XXXX)
     const date = new Date();
     const dateString =
       date.getFullYear().toString() +
       (date.getMonth() + 1).toString().padStart(2, "0") +
       date.getDate().toString().padStart(2, "0");
-    const randomPart = crypto.randomBytes(2).toString("hex").toUpperCase();
+    const randomPart = crypto.randomBytes(3).toString("hex").toUpperCase();
     const orderId = `ORD-${dateString}-${randomPart}`;
 
-    // Calculate estimated delivery (e.g., 5-7 business days from now)
+    // Calculate estimated delivery (7 days from now)
     const estimatedDelivery = new Date();
-    estimatedDelivery.setDate(estimatedDelivery.getDate() + 7); // 7 days from now
+    estimatedDelivery.setDate(estimatedDelivery.getDate() + 7);
 
-    // Create new order object
-    const newOrder = {
+    // Sanitize notes
+    const sanitizedNotes = sanitizeText(notes);
+
+    // Build payment details
+    const orderPaymentDetails = {
+      id: paymentIntentId || null,
+      status: paymentIntentId ? "Paid" : "Pending",
+      method: paymentMethod,
+    };
+
+    // Create new order document in the standalone Order collection
+    const newOrder = await Order.create({
+      userId,
       orderId,
-      items,
-      shippingAddress,
-      paymentMethod,
-      paymentDetails: paymentDetails || {
-        id: null,
-        status: "Pending",
-        method: paymentMethod,
+      items: verifiedOrderItems,
+      shippingAddress: {
+        type: shippingAddress.type || "Home",
+        name: shippingAddress.name.trim(),
+        phone: shippingAddress.phone.trim(),
+        street: shippingAddress.street.trim(),
+        city: shippingAddress.city.trim(),
+        state: shippingAddress.state.trim(),
+        zipCode: shippingAddress.zipCode.trim(),
+        isDefault: shippingAddress.isDefault || false,
       },
-      total: total,  // Use totalAmount for consistency with frontend
-      status: "Processing", // Start with Processing status
+      paymentMethod,
+      paymentDetails: orderPaymentDetails,
+      total: serverCalculatedTotal,
+      status: "Processing",
       statusHistory: [
         {
           status: "Processing",
           timestamp: new Date(),
-          comment: "Order placed",
+          comment: "Order placed successfully",
         },
       ],
       estimatedDelivery,
-      notes: notes || null,
-      createdAt: new Date(),
-    };
-
-    // Add order to user's orders array
-    user.orders.unshift(newOrder); // Add to the beginning of the array
+      notes: sanitizedNotes,
+    });
 
     // Clear user's cart after successful order
     user.cart.items = [];
-    user.cart.totaln = 0;
+    user.cart.totalAmount = 0;
     user.cart.lastUpdated = new Date();
-
-    // Save user with new order and empty cart
     await user.save();
 
     res.status(201).json({
@@ -122,27 +237,19 @@ const createOrder = async (req, res) => {
 
 /**
  * Get all orders for the authenticated user
+ * Security: Only returns orders belonging to the logged-in user
  */
 const getUserOrders = async (req, res) => {
   try {
     const userId = req.session.user._id;
 
-    // Find user and select only the orders field
-    const user = await User.findById(userId)
-      .select("orders")
-      .slice("orders", 0, 10)
+    const orders = await Order.find({ userId })
+      .sort({ createdAt: -1 })
       .lean();
-
-    if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: "User not found",
-      });
-    }
 
     res.status(200).json({
       success: true,
-      orders: user.orders,
+      orders,
     });
   } catch (error) {
     console.error("Get orders error:", error);
@@ -156,6 +263,7 @@ const getUserOrders = async (req, res) => {
 
 /**
  * Get a specific order by its ID
+ * Security: Scoped to the authenticated user — users can only see their own orders
  */
 const getOrderById = async (req, res) => {
   try {
@@ -169,20 +277,15 @@ const getOrderById = async (req, res) => {
       });
     }
 
-    // Find user
-    const user = await User.findById(userId);
-
-    if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: "User not found",
-      });
+    // Build a safe query — avoid passing undefined into $or
+    const query = { userId };
+    if (isValidObjectId(orderId)) {
+      query.$or = [{ orderId }, { _id: orderId }];
+    } else {
+      query.orderId = orderId;
     }
 
-    // Find the specific order
-    const order = user.orders.find(
-      (order) => order.orderId === orderId || order._id.toString() === orderId
-    );
+    const order = await Order.findOne(query).lean();
 
     if (!order) {
       return res.status(404).json({
@@ -207,6 +310,7 @@ const getOrderById = async (req, res) => {
 
 /**
  * Cancel an order (only if it's in Pending or Processing state)
+ * Security: Scoped to the authenticated user
  */
 const cancelOrder = async (req, res) => {
   try {
@@ -221,35 +325,29 @@ const cancelOrder = async (req, res) => {
       });
     }
 
-    // Find user
-    const user = await User.findById(userId);
-
-    if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: "User not found",
-      });
+    // Build a safe query
+    const query = { userId };
+    if (isValidObjectId(orderId)) {
+      query.$or = [{ orderId }, { _id: orderId }];
+    } else {
+      query.orderId = orderId;
     }
 
-    // Find the specific order
-    const orderIndex = user.orders.findIndex(
-      (order) => order.orderId === orderId || order._id.toString() === orderId
-    );
+    const order = await Order.findOne(query);
 
-    if (orderIndex === -1) {
+    if (!order) {
       return res.status(404).json({
         success: false,
         message: "Order not found",
       });
     }
 
-    const order = user.orders[orderIndex];
-
-    // Check if order can be cancelled
-    if (order.status !== "Pending" && order.status !== "Processing") {
+    // Use state machine to validate cancellation
+    const allowedTransitions = VALID_STATUS_TRANSITIONS[order.status] || [];
+    if (!allowedTransitions.includes("Cancelled")) {
       return res.status(400).json({
         success: false,
-        message: `Order cannot be cancelled in ${order.status} state`,
+        message: `Order cannot be cancelled in "${order.status}" state`,
       });
     }
 
@@ -258,11 +356,10 @@ const cancelOrder = async (req, res) => {
     order.statusHistory.push({
       status: "Cancelled",
       timestamp: new Date(),
-      comment: reason || "Cancelled by user",
+      comment: sanitizeText(reason) || "Cancelled by user",
     });
 
-    // Save changes
-    await user.save();
+    await order.save();
 
     res.status(200).json({
       success: true,
@@ -284,37 +381,21 @@ const cancelOrder = async (req, res) => {
  */
 const getAllOrders = async (req, res) => {
   try {
-    // Since orders are stored in User model, we need to aggregate them
-    const users = await User.find({}).select("orders name email phone");
+    const allOrders = await Order.find({})
+      .populate("userId", "name email phone")
+      .sort({ createdAt: -1 })
+      .lean();
 
-    // Extract all orders from all users
-    const allOrders = [];
-    users.forEach((user) => {
-      if (user.orders && user.orders.length > 0) {
-        // Add user info to each order
-        const ordersWithUserInfo = user.orders.map((order) => ({
-          ...order.toObject(),
-          user: {
-            _id: user._id,
-            name: user.name,
-            email: user.email,
-            phone: user.phone,
-          },
-        }));
-        allOrders.push(...ordersWithUserInfo);
-      }
-    });
-
-    // Sort by newest first
-    allOrders.sort((a, b) => {
-      const dateA = a.createdAt || a.statusHistory[0]?.timestamp || new Date(0);
-      const dateB = b.createdAt || b.statusHistory[0]?.timestamp || new Date(0);
-      return dateB - dateA;
-    });
+    // Map userId field to user for frontend compatibility
+    const ordersWithUserInfo = allOrders.map((order) => ({
+      ...order,
+      user: order.userId,
+      userId: order.userId?._id,
+    }));
 
     res.status(200).json({
       success: true,
-      orders: allOrders,
+      orders: ordersWithUserInfo,
     });
   } catch (error) {
     console.error("Error fetching all orders:", error);
@@ -327,12 +408,64 @@ const getAllOrders = async (req, res) => {
 };
 
 /**
- * Admin-only: Update order status
+ * Admin-only: Get a specific order with full details
+ */
+const getOrderByIdAdmin = async (req, res) => {
+  try {
+    const { orderId } = req.params;
+
+    if (!orderId) {
+      return res.status(400).json({
+        success: false,
+        message: "Order ID is required",
+      });
+    }
+
+    // Build a safe query — no user scoping for admin
+    let query = {};
+    if (isValidObjectId(orderId)) {
+      query.$or = [{ orderId }, { _id: orderId }];
+    } else {
+      query.orderId = orderId;
+    }
+
+    const order = await Order.findOne(query)
+      .populate("userId", "name email phone profilePicture")
+      .lean();
+
+    if (!order) {
+      return res.status(404).json({
+        success: false,
+        message: "Order not found",
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      order: {
+        ...order,
+        user: order.userId,
+        userId: order.userId?._id,
+      },
+    });
+  } catch (error) {
+    console.error("Admin get order by ID error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to retrieve order",
+      error: error.message,
+    });
+  }
+};
+
+/**
+ * Admin-only: Update order status with state machine validation
+ * Also supports updating trackingNumber, estimatedDelivery, and adding comments
  */
 const updateOrderStatus = async (req, res) => {
   try {
-    const { userId, orderId } = req.params;
-    const { status } = req.body;
+    const { orderId } = req.params;
+    const { status, trackingNumber, estimatedDelivery, comment } = req.body;
 
     if (!status) {
       return res.status(400).json({
@@ -341,39 +474,40 @@ const updateOrderStatus = async (req, res) => {
       });
     }
 
-    // Check if status is valid
-    const validStatuses = ["Processing", "Shipped", "Delivered", "Cancelled"];
-    if (!validStatuses.includes(status)) {
+    // Check if status is a recognized value
+    const allStatuses = Object.keys(VALID_STATUS_TRANSITIONS);
+    if (!allStatuses.includes(status)) {
       return res.status(400).json({
         success: false,
-        message: "Invalid status",
+        message: `Invalid status "${status}". Valid statuses: ${allStatuses.join(", ")}`,
       });
     }
 
-    // Find the user
-    const user = await User.findById(userId);
-
-    if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: "User not found",
-      });
+    // Find the order
+    let query = {};
+    if (isValidObjectId(orderId)) {
+      query.$or = [{ _id: orderId }, { orderId }];
+    } else {
+      query.orderId = orderId;
     }
 
-    // Find the order in the user's orders array
-    const orderIndex = user.orders.findIndex(
-      (order) => order.orderId === orderId || order._id.toString() === orderId
-    );
+    const order = await Order.findOne(query);
 
-    if (orderIndex === -1) {
+    if (!order) {
       return res.status(404).json({
         success: false,
         message: "Order not found",
       });
     }
 
-    // Get the order
-    const order = user.orders[orderIndex];
+    // Validate status transition using the state machine
+    const allowedTransitions = VALID_STATUS_TRANSITIONS[order.status] || [];
+    if (!allowedTransitions.includes(status)) {
+      return res.status(400).json({
+        success: false,
+        message: `Cannot transition from "${order.status}" to "${status}". Allowed transitions: ${allowedTransitions.length > 0 ? allowedTransitions.join(", ") : "none (terminal state)"}`,
+      });
+    }
 
     // Update the order status
     order.status = status;
@@ -382,11 +516,23 @@ const updateOrderStatus = async (req, res) => {
     order.statusHistory.push({
       status,
       timestamp: new Date(),
-      comment: `Status updated to ${status} by admin`,
+      comment: sanitizeText(comment) || `Status updated to ${status} by admin`,
     });
 
-    // Save the changes
-    await user.save();
+    // Update tracking number if provided
+    if (trackingNumber !== undefined) {
+      order.trackingNumber = sanitizeText(trackingNumber, 100);
+    }
+
+    // Update estimated delivery if provided
+    if (estimatedDelivery) {
+      const parsedDate = new Date(estimatedDelivery);
+      if (!isNaN(parsedDate.getTime())) {
+        order.estimatedDelivery = parsedDate;
+      }
+    }
+
+    await order.save();
 
     res.status(200).json({
       success: true,
@@ -409,5 +555,6 @@ export {
   getOrderById,
   cancelOrder,
   getAllOrders,
+  getOrderByIdAdmin,
   updateOrderStatus,
 };

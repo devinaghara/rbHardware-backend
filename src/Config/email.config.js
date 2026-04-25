@@ -1,44 +1,6 @@
-// // const nodemailer = require('nodemailer');
-// import nodemailer from 'nodemailer';
-// import { OTP } from "../Models/OTP.js"
-// // Generate 6-digit OTP
-// const generateOTP = () => {
-//     return Math.floor(100000 + Math.random() * 900000).toString();
-// };
-
-// // Verify OTP
-// const verifyOTP = async (email, otp) => {
-//     const otpDocument = await OTP.findOne({
-//         email,
-//         otp,
-//         expiresAt: { $gt: new Date() }
-//     });
-
-//     return !!otpDocument;
-// };
-
-// // Send OTP via email
-// const sendOTPEmail = async (email, otp) => {
-//     const transporter = nodemailer.createTransport({
-//         service: 'gmail',
-//         auth: {
-//             user: process.env.EMAIL_USER,
-//             pass: process.env.EMAIL_APP_PASSWORD,
-//         }
-//     });
-
-//     const mailOptions = {
-//         from: process.env.Google_Email,
-//         to: email,
-//         subject: 'OTP for Placement Portal Registration',
-//         text: `Your OTP for registration is ${otp}. It will expire in 10 minutes.`
-//     };
-
-//     await transporter.sendMail(mailOptions);
-// };
-
-
 import nodemailer from 'nodemailer';
+import bcrypt from 'bcrypt';
+import crypto from 'crypto';
 import { OTP } from "../Models/OTP.js";
 
 // Validate email format
@@ -47,14 +9,19 @@ const isValidEmail = (email) => {
     return emailRegex.test(email);
 };
 
-// Generate 6-digit OTP
+// Generate cryptographically secure 6-digit OTP
 const generateOTP = () => {
-    return Math.floor(100000 + Math.random() * 900000).toString();
+    return crypto.randomInt(100000, 999999).toString();
+};
+
+// Hash OTP before storing in database
+const hashOTP = async (otp) => {
+    return await bcrypt.hash(otp, 10);
 };
 
 // Send OTP via email with enhanced error handling
 const sendOTPEmail = async (email, otp) => {
-    if (!process.env.EMAIL_USER || !process.env.EMAIL_APP_PASSWORD || !process.env.EMAIL_USER) {
+    if (!process.env.EMAIL_USER || !process.env.EMAIL_APP_PASSWORD) {
         throw new Error('Email configuration environment variables are missing');
     }
 
@@ -69,8 +36,17 @@ const sendOTPEmail = async (email, otp) => {
     const mailOptions = {
         from: process.env.EMAIL_USER,
         to: email,
-        subject: 'OTP for Placement Portal Registration',
-        text: `Your OTP for registration is ${otp}. It will expire in 10 minutes.`
+        subject: 'Verify Your Email — RB Hardware',
+        html: `
+          <div style="font-family: Arial, sans-serif; max-width: 500px; margin: 0 auto;">
+            <h2>Email Verification</h2>
+            <p>Your verification code is:</p>
+            <div style="font-size: 32px; font-weight: bold; letter-spacing: 8px; text-align: center; padding: 16px; background: #f3f4f6; border-radius: 8px; margin: 16px 0;">
+                ${otp}
+            </div>
+            <p style="color: #666; font-size: 14px;">This code expires in 10 minutes. Do not share it with anyone.</p>
+          </div>
+        `
     };
 
     try {
@@ -81,15 +57,22 @@ const sendOTPEmail = async (email, otp) => {
     }
 };
 
-// Verify OTP with enhanced error handling
+// Verify OTP — compare plaintext input against hashed DB value
 const verifyOTP = async (email, otp) => {
     try {
-        const otpDocument = await OTP.findOne({
-            email,
-            otp,
+        // Find all non-expired OTPs for this email (should be just 1 due to rate limiting)
+        const otpDocuments = await OTP.find({
+            email: email.toLowerCase(),
             expiresAt: { $gt: new Date() }
         });
-        return !!otpDocument;
+
+        // Compare against each (handles edge case of multiple OTPs)
+        for (const doc of otpDocuments) {
+            const isMatch = await bcrypt.compare(otp, doc.otp);
+            if (isMatch) return true;
+        }
+
+        return false;
     } catch (error) {
         console.error('OTP verification failed:', error);
         throw new Error('Failed to verify OTP');
@@ -98,6 +81,7 @@ const verifyOTP = async (email, otp) => {
 
 export {
     generateOTP,
+    hashOTP,
     verifyOTP,
     sendOTPEmail,
     isValidEmail

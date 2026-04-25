@@ -325,4 +325,43 @@ const updateProduct = async (req, res) => {
     }
 };
 
-export { addProducts, getAllProducts, getProduct, updateLinkedProducts, updateProduct, deleteProduct };   
+/**
+ * Admin-only: Toggle product's orderable status
+ */
+const toggleProductOrderable = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { isOrderable } = req.body;
+
+        if (typeof isOrderable !== "boolean") {
+            return res.status(400).json({
+                message: "isOrderable must be a boolean value",
+            });
+        }
+
+        const product = await Product.findByIdAndUpdate(
+            id,
+            { isOrderable },
+            { new: true }
+        );
+
+        if (!product) {
+            return res.status(404).json({ message: "Product not found" });
+        }
+
+        res.status(200).json({
+            message: `Product is now ${isOrderable ? "orderable" : "not orderable"}`,
+            product,
+        });
+    } catch (error) {
+        if (error.name === "CastError") {
+            return res.status(400).json({ message: "Invalid product ID" });
+        }
+        res.status(500).json({
+            message: "Failed to update product orderable status",
+            error: error.message,
+        });
+    }
+};
+
+export { addProducts, getAllProducts, getProduct, updateLinkedProducts, updateProduct, deleteProduct, toggleProductOrderable };   

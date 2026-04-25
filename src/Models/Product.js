@@ -42,6 +42,10 @@ const productSchema = new mongoose.Schema({
     material: {         
         type: String,         
         required: true     
+    },
+    isOrderable: {
+        type: Boolean,
+        default: true,
     } 
 }, { 
     timestamps: true 

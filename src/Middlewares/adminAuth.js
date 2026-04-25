@@ -1,17 +1,21 @@
 import User from '../Models/User.js';
 
+/**
+ * Middleware to check if the authenticated user is an admin.
+ * Supports both session-based and Passport-based authentication.
+ */
 export const isAdmin = async (req, res, next) => {
     try {
-        // Check if user is authenticated
-        if (!req.session.user || !req.session.user._id) {
+        // Get userId from session or Passport
+        const userId = req.session?.user?._id || req.user?._id;
+
+        if (!userId) {
             return res.status(401).json({
                 success: false,
                 message: "Unauthorized access"
             });
         }
 
-        const userId = req.session.user._id;
-        
         // Fetch user from database to get up-to-date role information
         const user = await User.findById(userId);
         
