@@ -39,7 +39,10 @@ app.use(cookieParser());
 connectDB()
   .then(() => {
 
-    const isProduction = process.env.NODE_ENV === "production";
+    // Check NODE_ENV or if FRONTEND_URL uses HTTPS (production indicator)
+    const isProduction = process.env.NODE_ENV === "production" || 
+                         process.env.NODE_ENV === "Production" || 
+                         (process.env.FRONTEND_URL && process.env.FRONTEND_URL.startsWith("https://"));
 
     app.use(session({
       secret: process.env.Session_Secret || "secret",

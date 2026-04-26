@@ -43,7 +43,8 @@ router.get(
     failureRedirect: "/auth/login/failed",
   }),
   (req, res) => {
-    // After successful Google auth, also set session.user for consistency
+    const frontendUrl = process.env.FRONTEND_URL ? process.env.FRONTEND_URL.replace(/\/$/, '') : "http://localhost:5173";
+
     if (req.user) {
       req.session.user = {
         _id: req.user._id,
@@ -51,13 +52,15 @@ router.get(
         email: req.user.email,
         role: req.user.role,
       };
+      
       req.session.save((err) => {
         if (err) console.error("Session save error after Google auth:", err);
+        // Redirect only after session is saved to prevent 401 on immediate frontend fetch
+        res.redirect(`${frontendUrl}/login-success`);
       });
+    } else {
+      res.redirect(`${frontendUrl}/login-success`);
     }
-
-    // Redirect to frontend — use env var, not hardcoded localhost
-    res.redirect(`${process.env.FRONTEND_URL}/login-success`);
   }
 );
 
